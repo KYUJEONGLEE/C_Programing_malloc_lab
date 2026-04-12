@@ -180,6 +180,28 @@ static void *find_fit(size_t asize)
 
     return NULL;
 }
+
+static void place(void *bp, size_t asize)
+{
+    char *next_bp;
+    size_t fsize = GET_SIZE(HDRP(bp));
+
+    if (fsize - asize >= (2 * DSIZE))
+    {
+        PUT(HDRP(bp), PACK(asize, 1));
+        PUT(FTRP(bp), PACK(asize, 1));
+        next_bp = NEXT_BLKP(bp);
+        PUT(HDRP(next_bp), PACK(fsize - asize, 0));
+        PUT(FTRP(next_bp), PACK(fsize - asize, 0));
+    }
+    else
+    {
+        PUT(HDRP(bp), PACK(fsize, 1));
+        PUT(FTRP(bp), PACK(fsize, 1));
+    }
+
+    return;
+}
 void *mm_malloc(size_t size)
 {
     int newsize = ALIGN(size + SIZE_T_SIZE);
