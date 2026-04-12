@@ -166,8 +166,19 @@ int mm_init(void)
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 
-static void find_fit(size_t asize)
+static void *find_fit(size_t asize)
 {
+    char *bp = heap_listp;
+
+    while (GET_SIZE(HDRP(bp)) > 0)
+    {
+        if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= asize))
+            return bp;
+
+        bp = NEXT_BLKP(bp);
+    }
+
+    return NULL;
 }
 void *mm_malloc(size_t size)
 {
