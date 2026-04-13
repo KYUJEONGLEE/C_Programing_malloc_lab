@@ -88,26 +88,6 @@ team_t team = {
 */
 static char *heap_listp = NULL;
 
-static void *extend_heap(size_t words)
-{
-    char *bp;
-    size_t size;
-
-    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
-
-    bp = mem_sbrk(size);
-
-    if (bp == (void *)-1)
-        return NULL;
-
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
-
-    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
-
-    return coalesce(bp);
-}
-
 static void *coalesce(void *bp)
 {
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
@@ -142,6 +122,26 @@ static void *coalesce(void *bp)
         bp = PREV_BLKP(bp);
     }
     return bp;
+}
+
+static void *extend_heap(size_t words)
+{
+    char *bp;
+    size_t size;
+
+    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
+
+    bp = mem_sbrk(size);
+
+    if (bp == (void *)-1)
+        return NULL;
+
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
+
+    return coalesce(bp);
 }
 
 int mm_init(void)
@@ -257,7 +257,10 @@ void mm_free(void *bp)
 void *mm_realloc(void *bp, size_t size)
 {
     char *new_bp;
+    size_t asize;
+    size_t oldSize;
     size_t copySize;
+    size_t nextSize;
 
     if (bp == NULL)
         return mm_malloc(size);
@@ -266,6 +269,43 @@ void *mm_realloc(void *bp, size_t size)
     {
         mm_free(bp);
         return NULL;
+    }
+
+    if (size <= DSIZE)
+    {
+        asize = (2 * DSIZE);
+    }
+    else
+    {
+        asize = DSIZE * ((DSIZE + (DSIZE - 1) + size) / DSIZE);
+    }
+
+    oldSize = GET_SIZE(HDRP(bp));
+    if (oldSize >= asize)
+        return bp;
+
+    nextSize = GET_SIZE(HDRP(NEXT_BLKP(bp)));
+
+    if ((!GET_ALLOC(HDRP(NEXT_BLKP(bp))) && (oldSize + nextSize >= asize)))
+    {
+        size_t totalSize = oldSize + nextSize;
+
+        if (totalSize - asize >= 2 * DSIZE)
+        {
+            PUT(HDRP(bp), PACK(asize, 1));
+            PUT(FTRP(bp), PACK(asize, 1));
+
+            void *next_bp = NEXT_BLKP(bp);
+            PUT(HDRP(next_bp), PACK(totalSize - asize, 0));
+            PUT(FTRP(next_bp), PACK(totalSize - asize, 0));
+        }
+        else
+        {
+            PUT(HDRP(bp), PACK(totalSize, 1));
+            PUT(FTRP(bp), PACK(totalSize, 1));
+        }
+
+        return bp;
     }
 
     if ((new_bp = mm_malloc(size)) == NULL)
