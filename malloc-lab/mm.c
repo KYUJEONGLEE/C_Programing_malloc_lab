@@ -204,22 +204,50 @@ static void place(void *bp, size_t asize)
 }
 void *mm_malloc(size_t size)
 {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
+    size_t asize;
+    size_t extendsize;
+    char *bp;
+
+    // 예외 처리
+    if (size == 0)
         return NULL;
+
+    // 새로운 블록 asize 계산 완료
+    if (size < DSIZE)
+    {
+        asize = (2 * DSIZE);
+    }
     else
     {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+        asize = DSIZE * ((DSIZE + (DSIZE - 1) + size) / DSIZE);
     }
+
+    // free 블록 탐색, find_fit(asize) 사용
+    if ((bp = find_fit(asize)) != NULL)
+    {
+        place(bp, asize);
+        return bp;
+    }
+
+    // 맞는 free 공간을 찾지 못했다면 Heap을 늘려준다.
+    extendsize = MAX(asize, CHUNKSIZE);
+    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
+        return NULL;
+
+    // 새롭게 늘린 Heap 공간에 place 해준다.
+    place(bp, asize);
+    return bp;
 }
 
 /*
  * mm_free - Freeing a block does nothing.
  */
-void mm_free(void *ptr)
+void mm_free(void *bp)
 {
+    size_t size = GET_SIZE(HDRP(bp));
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    coalesce(bp);
 }
 
 /*
