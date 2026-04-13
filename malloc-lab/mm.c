@@ -48,6 +48,7 @@ team_t team = {
 #define CHUNKSIZE (1 << 12)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
 
 // 블록의 header/footer에 값(크기 및 할당 상태)을 다루는 매크로
 #define PACK(size, alloc) ((size) | (alloc))
@@ -253,19 +254,29 @@ void mm_free(void *bp)
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
-void *mm_realloc(void *ptr, size_t size)
+void *mm_realloc(void *bp, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
+    char *new_bp;
     size_t copySize;
 
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
+    if (bp == NULL)
+        return mm_malloc(size);
+
+    if (size == 0)
+    {
+        mm_free(bp);
         return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    if (size < copySize)
-        copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+    }
+
+    if ((new_bp = mm_malloc(size)) == NULL)
+        return NULL;
+
+    // 이 다음 코드부터는 new_bp 에는 size로 설정된, 새로운 블록의 bp가 저장된다.
+    // 이제 기존의 데이터를 옮겨주는 작업이 필요하다.
+
+    copySize = MIN(size, GET_SIZE(HDRP(bp)) - DSIZE);
+    memcpy(new_bp, bp, copySize);
+    mm_free(bp);
+
+    return new_bp;
 }
