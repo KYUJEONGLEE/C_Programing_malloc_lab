@@ -87,6 +87,7 @@ team_t team = {
        - 4단계 : 바로 앞 블록도 free 상태하면 coalesce() (병합) 한다.
 */
 static char *heap_listp = NULL;
+static char *rover;
 
 static void *coalesce(void *bp)
 {
@@ -121,6 +122,10 @@ static void *coalesce(void *bp)
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
+
+    if ((rover >= (char *)bp) && (rover < NEXT_BLKP(bp)))
+        rover = (char *)bp;
+
     return bp;
 }
 
@@ -155,6 +160,7 @@ int mm_init(void)
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
 
     heap_listp += (2 * WSIZE);
+    rover = heap_listp;
 
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
@@ -169,13 +175,30 @@ int mm_init(void)
 
 static void *find_fit(size_t asize)
 {
-    char *bp = heap_listp;
+    // char *bp = heap_listp;
+    char *oldrover = rover;
+    char *bp = rover;
 
     while (GET_SIZE(HDRP(bp)) > 0)
     {
-        if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= asize))
-            return bp;
 
+        if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= asize))
+        {
+            rover = bp;
+            return bp;
+        }
+
+        bp = NEXT_BLKP(bp);
+    }
+
+    bp = heap_listp;
+    while (bp < oldrover)
+    {
+        if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= asize))
+        {
+            rover = bp;
+            return bp;
+        }
         bp = NEXT_BLKP(bp);
     }
 
@@ -272,13 +295,9 @@ void *mm_realloc(void *bp, size_t size)
     }
 
     if (size <= DSIZE)
-    {
         asize = (2 * DSIZE);
-    }
     else
-    {
         asize = DSIZE * ((DSIZE + (DSIZE - 1) + size) / DSIZE);
-    }
 
     oldSize = GET_SIZE(HDRP(bp));
     if (oldSize >= asize)
