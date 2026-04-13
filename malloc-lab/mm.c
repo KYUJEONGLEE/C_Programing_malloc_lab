@@ -67,6 +67,9 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+// size 요청을 header/footer, 정렬조건을 넣어서 새로운 asize를 반환하는 매크로
+#define ADJUST_BLOCK_SIZE(size) (MAX(2 * DSIZE, ALIGN((size) + DSIZE)))
+
 /*
  * mm_init - initialize the malloc package.
  */
@@ -237,14 +240,7 @@ void *mm_malloc(size_t size)
         return NULL;
 
     // 새로운 블록 asize 계산 완료
-    if (size < DSIZE)
-    {
-        asize = (2 * DSIZE);
-    }
-    else
-    {
-        asize = DSIZE * ((DSIZE + (DSIZE - 1) + size) / DSIZE);
-    }
+    asize = ADJUST_BLOCK_SIZE(size);
 
     // free 블록 탐색, find_fit(asize) 사용
     if ((bp = find_fit(asize)) != NULL)
@@ -285,56 +281,98 @@ void *mm_realloc(void *bp, size_t size)
     size_t copySize;
     size_t nextSize;
 
+    // 기존 포인터가 NULL이면 realloc이 아니라 malloc과 동일
     if (bp == NULL)
         return mm_malloc(size);
 
+    // 요청 크기가 0이면 기존 블록을 해제하고 NULL 반환
     if (size == 0)
     {
         mm_free(bp);
         return NULL;
     }
 
-    if (size <= DSIZE)
-        asize = (2 * DSIZE);
-    else
-        asize = DSIZE * ((DSIZE + (DSIZE - 1) + size) / DSIZE);
+    // 사용자가 요청한 payload 크기를
+    // 정렬 + header/footer를 포함한 block 크기(asize)로 변환
+    asize = ADJUST_BLOCK_SIZE(size);
 
+    // 현재 블록의 전체 크기(header/footer 포함)
     oldSize = GET_SIZE(HDRP(bp));
-    if (oldSize >= asize)
-        return bp;
 
+    // 1. 현재 블록만으로 이미 충분히 큰 경우
+    // 새로 할당하거나 복사할 필요 없이 그대로 반환
+    if (oldSize >= asize)
+    {
+        if (oldSize - asize >= 2 * DSIZE)
+        {
+            // 앞부분은 realloc 결과 블록
+            PUT(HDRP(bp), PACK(asize, 1));
+            PUT(FTRP(bp), PACK(asize, 1));
+
+            // 뒤쪽 남는 공간은 free block
+            void *next_bp = NEXT_BLKP(bp);
+            PUT(HDRP(next_bp), PACK(oldSize - asize, 0));
+            PUT(FTRP(next_bp), PACK(oldSize - asize, 0));
+        }
+        return bp;
+    }
+
+    // 다음 블록의 크기 확인
     nextSize = GET_SIZE(HDRP(NEXT_BLKP(bp)));
 
+    // 2. 다음 블록이 free이고,
+    // 현재 블록과 합치면 필요한 크기를 만족하는 경우
+    // -> 제자리(in-place) 확장 시도
     if ((!GET_ALLOC(HDRP(NEXT_BLKP(bp))) && (oldSize + nextSize >= asize)))
     {
         size_t totalSize = oldSize + nextSize;
 
+        // 합친 뒤 남는 공간이 최소 블록 크기 이상이면 분할
         if (totalSize - asize >= 2 * DSIZE)
         {
+            // 앞부분은 realloc된 블록으로 사용
             PUT(HDRP(bp), PACK(asize, 1));
             PUT(FTRP(bp), PACK(asize, 1));
 
+            // 뒷부분 남는 공간은 새로운 free block으로 생성
             void *next_bp = NEXT_BLKP(bp);
             PUT(HDRP(next_bp), PACK(totalSize - asize, 0));
             PUT(FTRP(next_bp), PACK(totalSize - asize, 0));
         }
         else
         {
+            // 남는 공간이 너무 작으면 분할하지 않고 통째로 사용
             PUT(HDRP(bp), PACK(totalSize, 1));
             PUT(FTRP(bp), PACK(totalSize, 1));
         }
 
+        // 복사 없이 현재 포인터 그대로 반환
         return bp;
     }
 
+    if (!GET_SIZE(HDRP(NEXT_BLKP(bp))))
+    {
+        size_t extend_amount = MAX(asize - oldSize, CHUNKSIZE);
+
+        if (extend_heap(extend_amount / WSIZE) != NULL)
+        {
+            if (GET_SIZE(HDRP(bp)) >= asize)
+            {
+                return bp;
+            }
+        }
+    }
+
+    // 3. 제자리 확장이 안 되면 새 블록을 할당
     if ((new_bp = mm_malloc(size)) == NULL)
         return NULL;
 
-    // 이 다음 코드부터는 new_bp 에는 size로 설정된, 새로운 블록의 bp가 저장된다.
-    // 이제 기존의 데이터를 옮겨주는 작업이 필요하다.
-
+    // 기존 데이터는 새 블록으로 복사
+    // 복사 크기는 "요청한 크기"와 "기존 payload 크기" 중 작은 값
     copySize = MIN(size, GET_SIZE(HDRP(bp)) - DSIZE);
     memcpy(new_bp, bp, copySize);
+
+    // 기존 블록 해제
     mm_free(bp);
 
     return new_bp;
