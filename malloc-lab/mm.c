@@ -40,8 +40,6 @@ team_t team = {
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
 // 상수 매크로
 #define WSIZE 4
 #define DSIZE 8
@@ -70,6 +68,12 @@ team_t team = {
 // size 요청을 header/footer, 정렬조건을 넣어서 새로운 asize를 반환하는 매크로
 #define ADJUST_BLOCK_SIZE(size) (MAX(2 * DSIZE, ALIGN((size) + DSIZE)))
 
+// free 블록용 매크로
+#define PRED(bp) (*(char **)(bp))
+#define SUCC(bp) (*(char **)((char *)(bp) + WSIZE))
+
+#define SET_PRED(bp, ptr) (PRED(bp) = (ptr))
+#define SET_SUCC(bp, ptr) (SUCC(bp) = (ptr))
 /*
  * mm_init - initialize the malloc package.
  */
@@ -90,11 +94,11 @@ team_t team = {
        - 4단계 : 바로 앞 블록도 free 상태하면 coalesce() (병합) 한다.
 */
 static char *heap_listp = NULL;
-static char *rover;
+static char *free_listp = NULL;
 
 static void *coalesce(void *bp)
 {
-    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+    size_t prev_alloc = GET_ALLOC(HDRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
@@ -113,21 +117,18 @@ static void *coalesce(void *bp)
     }
     else if (!prev_alloc && next_alloc)
     {
-        size += GET_SIZE(FTRP(PREV_BLKP(bp)));
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
     else
     {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp))) + GET_SIZE(FTRP(PREV_BLKP(bp)));
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp))) + GET_SIZE(HDRP(PREV_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
-
-    if ((rover >= (char *)bp) && (rover < NEXT_BLKP(bp)))
-        rover = (char *)bp;
 
     return bp;
 }
@@ -163,7 +164,7 @@ int mm_init(void)
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
 
     heap_listp += (2 * WSIZE);
-    rover = heap_listp;
+    free_listp = NULL;
 
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
@@ -178,30 +179,13 @@ int mm_init(void)
 
 static void *find_fit(size_t asize)
 {
-    // char *bp = heap_listp;
-    char *oldrover = rover;
-    char *bp = rover;
+    char *bp = heap_listp;
 
     while (GET_SIZE(HDRP(bp)) > 0)
     {
-
         if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= asize))
-        {
-            rover = bp;
             return bp;
-        }
 
-        bp = NEXT_BLKP(bp);
-    }
-
-    bp = heap_listp;
-    while (bp < oldrover)
-    {
-        if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= asize))
-        {
-            rover = bp;
-            return bp;
-        }
         bp = NEXT_BLKP(bp);
     }
 
