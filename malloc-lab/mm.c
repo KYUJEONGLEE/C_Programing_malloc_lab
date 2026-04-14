@@ -72,7 +72,9 @@ team_t team = {
 #define PRED(bp) (*(char **)(bp))
 #define SUCC(bp) (*(char **)((char *)(bp) + WSIZE))
 
+// bp 블록의 pred 칸에 ptr 저장
 #define SET_PRED(bp, ptr) (PRED(bp) = (ptr))
+// bp 블록의 succ 칸에 ptr 저장
 #define SET_SUCC(bp, ptr) (SUCC(bp) = (ptr))
 /*
  * mm_init - initialize the malloc package.
@@ -96,7 +98,50 @@ team_t team = {
 static char *heap_listp = NULL;
 static char *free_listp = NULL;
 
-static void *coalesce(void *bp)
+static void insert_free_block(char *bp)
+{
+    // 새 free 블록이 생기면 하는 일 : free list에 연결하기
+    // 여기서는 LIFO 방식으로 구현
+    // -> 새 free 블록을 free list 맨 앞에 넣는다.
+
+    // free_listp 가 비어있다면, pred/succ 에 null 을 넣어주고 free 리스트 시작점을 bp로
+    if (free_listp == NULL)
+    {
+        SET_PRED(bp, NULL);
+        SET_SUCC(bp, NULL);
+        free_listp = bp;
+    }
+    else
+    {
+        SET_PRED(bp, NULL);
+        SET_SUCC(bp, free_listp);
+        SET_PRED(free_listp, bp);
+        free_listp = bp;
+    }
+}
+
+static void remove_free_block(char *bp)
+{
+    if ((PRED(bp) == NULL) && (SUCC(bp) == NULL))
+        free_listp = NULL;
+    else if ((PRED(bp) == NULL) && (SUCC(bp) != NULL))
+    {
+        free_listp = SUCC(bp);
+        SET_PRED(SUCC(bp), NULL);
+    }
+    else if ((PRED(bp) != NULL) && (SUCC(bp) == NULL))
+    {
+        SET_SUCC(PRED(bp), NULL);
+    }
+    else
+    {
+        SET_SUCC(PRED(bp), SUCC(bp));
+        SET_PRED(SUCC(bp), PRED(bp));
+    }
+    SET_PRED(bp, NULL);
+    SET_SUCC(bp, NULL);
+}
+static void *coalesce(char *bp)
 {
     size_t prev_alloc = GET_ALLOC(HDRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
@@ -104,33 +149,52 @@ static void *coalesce(void *bp)
 
     if (prev_alloc && next_alloc)
     {
+        insert_free_block(bp);
         return bp;
     }
 
+    // next만 free 인 경우
     else if (prev_alloc && !next_alloc)
     {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        // 호출 순서가 중요하다.
-
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+        char *next_bp = NEXT_BLKP(bp);
+        remove_free_block(next_bp);
+        size += GET_SIZE(HDRP(next_bp));
         PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
+
+        insert_free_block(bp);
+        return bp;
     }
     else if (!prev_alloc && next_alloc)
     {
-        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        char *prev_bp = PREV_BLKP(bp);
+        remove_free_block(prev_bp);
+        size += GET_SIZE(HDRP(prev_bp));
+        PUT(HDRP(prev_bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
-        bp = PREV_BLKP(bp);
+
+        bp = prev_bp;
+
+        insert_free_block(bp);
+        return bp;
     }
     else
     {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp))) + GET_SIZE(HDRP(PREV_BLKP(bp)));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-        bp = PREV_BLKP(bp);
-    }
+        char *next_bp = NEXT_BLKP(bp);
+        char *prev_bp = PREV_BLKP(bp);
 
-    return bp;
+        remove_free_block(prev_bp);
+        remove_free_block(next_bp);
+
+        size += GET_SIZE(HDRP(prev_bp)) + GET_SIZE(HDRP(next_bp));
+        PUT(HDRP(prev_bp), PACK(size, 0));
+        PUT(FTRP(next_bp), PACK(size, 0));
+
+        bp = prev_bp;
+
+        insert_free_block(bp);
+        return bp;
+    }
 }
 
 static void *extend_heap(size_t words)
@@ -179,16 +243,13 @@ int mm_init(void)
 
 static void *find_fit(size_t asize)
 {
-    char *bp = heap_listp;
+    char *bp = free_listp;
 
-    while (GET_SIZE(HDRP(bp)) > 0)
+    for (; bp != NULL; bp = SUCC(bp))
     {
-        if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= asize))
+        if (GET_SIZE(HDRP(bp)) >= asize)
             return bp;
-
-        bp = NEXT_BLKP(bp);
     }
-
     return NULL;
 }
 
@@ -196,7 +257,7 @@ static void place(void *bp, size_t asize)
 {
     char *next_bp;
     size_t fsize = GET_SIZE(HDRP(bp));
-
+    remove_free_block(bp);
     if (fsize - asize >= (2 * DSIZE))
     {
         PUT(HDRP(bp), PACK(asize, 1));
@@ -204,6 +265,7 @@ static void place(void *bp, size_t asize)
         next_bp = NEXT_BLKP(bp);
         PUT(HDRP(next_bp), PACK(fsize - asize, 0));
         PUT(FTRP(next_bp), PACK(fsize - asize, 0));
+        insert_free_block(next_bp);
     }
     else
     {
